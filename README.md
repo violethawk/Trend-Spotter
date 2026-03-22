@@ -1,4 +1,4 @@
-# Trend Spotter — Introduction to Flywheels
+# Trend Spotter: An Introduction to Flywheels
 
 A system for identifying and evaluating emerging trends within a specific field across multiple time horizons.
 
