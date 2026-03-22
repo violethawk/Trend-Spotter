@@ -11,7 +11,7 @@ from __future__ import annotations
 import re
 from typing import Dict, List
 
-from .scoring import MENTION_WEIGHTS
+from .scoring.mentions import MENTION_WEIGHTS
 
 
 def rank_clusters(

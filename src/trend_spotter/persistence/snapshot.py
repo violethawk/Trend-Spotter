@@ -15,13 +15,14 @@ import sqlite3
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
-from .signal import RawSignal
+from ..config import DEFAULT_DB_PATH
+from ..signal import RawSignal
 
 
 class SnapshotStore:
     """Handles storage and retrieval of run snapshots."""
 
-    def __init__(self, db_path: str = "trend_spotter.db") -> None:
+    def __init__(self, db_path: str = DEFAULT_DB_PATH) -> None:
         self.db_path = db_path
         self.conn = sqlite3.connect(db_path)
         self.conn.row_factory = sqlite3.Row

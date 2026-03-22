@@ -11,8 +11,8 @@ import uuid
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
-from .durability import DurabilityResult
-from .snapshot import SnapshotStore
+from .scoring.durability import DurabilityResult
+from .persistence.snapshot import SnapshotStore
 
 
 # Classification thresholds (tunable)

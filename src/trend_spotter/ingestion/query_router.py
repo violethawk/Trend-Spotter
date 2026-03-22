@@ -22,9 +22,9 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, Iterable, List, Tuple
 
-from .config import Config
+from ..config import Config
 from .retrieval import fetch_github, fetch_hn, fetch_web
-from .signal import RawSignal
+from ..signal import RawSignal
 
 
 def collect_signals(

@@ -23,9 +23,14 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
 
 from dotenv import load_dotenv
+
+# Default database location: src/trend_spotter/data/trend_spotter.db
+_PACKAGE_DIR = Path(__file__).resolve().parent
+DEFAULT_DB_PATH = str(_PACKAGE_DIR / "data" / "trend_spotter.db")
 
 
 @dataclass

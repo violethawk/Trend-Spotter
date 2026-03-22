@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "trend-spotter"
+version = "0.1.0"
+description = "Identify which emerging signals will persist before they become obvious"
+requires-python = ">=3.10"
+dependencies = [
+    "requests",
+    "python-dotenv",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+]
+
+[project.scripts]
+trend-spotter = "trend_spotter.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

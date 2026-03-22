@@ -15,7 +15,7 @@ from typing import List, Optional
 
 import requests
 
-from .signal import RawSignal
+from ..signal import RawSignal
 
 
 logger = logging.getLogger(__name__)

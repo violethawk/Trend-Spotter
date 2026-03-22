@@ -15,8 +15,8 @@ from typing import Any, Dict, List, Optional
 
 import requests
 
-from .config import Config
-from .signal import RawSignal
+from ..config import Config
+from ..signal import RawSignal
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +63,7 @@ def compute_durability_scores(
     all_signals: List[RawSignal],
     config: Config,
     per_trend_gaps: Dict[str, List[str]],
+    weights: Optional[Dict[str, float]] = None,
 ) -> Dict[str, DurabilityResult]:
     """Compute durability scores for each cluster.
 
@@ -71,10 +72,13 @@ def compute_durability_scores(
         all_signals: All raw signals for this run.
         config: Runtime configuration (needed for sentiment LLM call).
         per_trend_gaps: Mutable dict to append data gaps per cluster label.
+        weights: Optional custom weights from Phase 6 tuning. If None,
+            falls back to the hand-tuned DURABILITY_WEIGHTS baseline.
 
     Returns:
         Mapping from cluster label to DurabilityResult.
     """
+    active_weights = weights if weights is not None else DURABILITY_WEIGHTS
     sig_map = {sig.id: sig for sig in all_signals}
     results: Dict[str, DurabilityResult] = {}
 
@@ -103,7 +107,7 @@ def compute_durability_scores(
 
         # Weighted average
         weighted_sum = sum(
-            sub_scores[name] * DURABILITY_WEIGHTS[name]
+            sub_scores[name] * active_weights.get(name, DURABILITY_WEIGHTS.get(name, 0))
             for name in DURABILITY_WEIGHTS
         )
         final_score = int(round(weighted_sum * sentiment_mult))
