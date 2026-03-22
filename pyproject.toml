@@ -15,6 +15,11 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest",
+    "httpx",
+]
+api = [
+    "fastapi>=0.100",
+    "uvicorn[standard]>=0.20",
 ]
 
 [project.scripts]

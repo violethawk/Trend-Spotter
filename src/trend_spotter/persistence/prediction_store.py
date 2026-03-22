@@ -106,6 +106,22 @@ class PredictionStore:
             );
             """
         )
+
+        # Phase 7: Cross-domain trends
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS cross_domain_trends (
+                id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+                meta_label         TEXT NOT NULL,
+                description        TEXT,
+                domain_count       INTEGER NOT NULL,
+                matches_json       TEXT NOT NULL,
+                confidence         REAL NOT NULL,
+                convergence_window TEXT,
+                detected_at        TEXT NOT NULL
+            );
+            """
+        )
         self.conn.commit()
 
     def write_prediction(
@@ -371,3 +387,69 @@ class PredictionStore:
             ),
         )
         self.conn.commit()
+
+    # ------------------------------------------------------------------
+    # Phase 7: Cross-domain trends
+    # ------------------------------------------------------------------
+
+    def get_recent_predictions(
+        self, lookback_days: int = 30
+    ) -> List[Dict[str, Any]]:
+        """Get predictions created within the lookback window."""
+        cutoff = (
+            datetime.now(timezone.utc) - timedelta(days=lookback_days)
+        ).isoformat()
+        cur = self.conn.cursor()
+        cur.execute(
+            "SELECT * FROM predictions WHERE created_at >= ? ORDER BY created_at DESC",
+            (cutoff,),
+        )
+        return [dict(row) for row in cur.fetchall()]
+
+    def write_cross_domain_trend(self, trend: Any) -> None:
+        """Persist a detected cross-domain trend."""
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO cross_domain_trends
+                (meta_label, description, domain_count, matches_json,
+                 confidence, convergence_window, detected_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                trend.meta_label,
+                trend.description,
+                trend.domain_count,
+                json.dumps([
+                    {
+                        "field": m.field,
+                        "trend_label": m.trend_label,
+                        "prediction_id": m.prediction_id,
+                        "acceleration_score": m.acceleration_score,
+                        "durability_score": m.durability_score,
+                        "classification": m.classification,
+                    }
+                    for m in trend.domains
+                ]),
+                trend.confidence,
+                trend.convergence_window,
+                trend.detected_at,
+            ),
+        )
+        self.conn.commit()
+
+    def get_cross_domain_trends(
+        self, limit: int = 50
+    ) -> List[Dict[str, Any]]:
+        """Get stored cross-domain trends."""
+        cur = self.conn.cursor()
+        cur.execute(
+            "SELECT * FROM cross_domain_trends ORDER BY detected_at DESC LIMIT ?",
+            (limit,),
+        )
+        rows = []
+        for row in cur.fetchall():
+            d = dict(row)
+            d["matches"] = json.loads(d.pop("matches_json"))
+            rows.append(d)
+        return rows
