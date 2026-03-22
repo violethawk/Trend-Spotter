@@ -23,7 +23,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..config import Config
-from ..ingestion.retrieval import fetch_web, fetch_github, fetch_hn
+from ..ingestion.sources import get_available_sources
 from ..signal import RawSignal
 from ..ingestion.clustering import cluster_signals
 from ..scoring.durability import compute_durability_scores
@@ -224,22 +224,21 @@ def compute_signal_correlation(
 # ---------------------------------------------------------------------------
 
 def _requery_signals(field: str, window: str, config: Config) -> List[RawSignal]:
-    """Re-query all three sources for the field. Failures return empty."""
+    """Re-query all available sources for the field. Failures return empty."""
+    available = get_available_sources()
     signals: List[RawSignal] = []
-    fetchers = []
 
-    with ThreadPoolExecutor(max_workers=3) as executor:
+    with ThreadPoolExecutor(max_workers=max(len(available), 1)) as executor:
         futures = {
-            executor.submit(fetch_web, field, window, config.serpapi_key): "web",
-            executor.submit(fetch_github, field, window, config.github_token): "github",
-            executor.submit(fetch_hn, field, window): "hn",
+            executor.submit(source.fetch, field, window): source.name
+            for source in available
         }
         for future in as_completed(futures):
-            source = futures[future]
+            source_name = futures[future]
             try:
                 signals.extend(future.result())
             except Exception as exc:
-                logger.warning("Re-query failed for %s: %s", source, exc)
+                logger.warning("Re-query failed for %s: %s", source_name, exc)
 
     return signals
 

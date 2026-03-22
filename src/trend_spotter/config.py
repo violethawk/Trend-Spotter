@@ -38,46 +38,43 @@ class Config:
     """Data class representing runtime configuration.
 
     Attributes:
-        serpapi_key: SerpAPI API key.
-        openai_key:  OpenAI API key.
+        openai_key:  OpenAI API key (required for clustering).
+        serpapi_key: SerpAPI API key (optional; web source disabled without it).
         github_token: Optional GitHub personal access token.
     """
 
-    serpapi_key: str
     openai_key: str
-    github_token: Optional[str]
+    serpapi_key: Optional[str] = None
+    github_token: Optional[str] = None
 
 
 def load_config() -> Config:
     """Load configuration from environment.
 
+    Only OPENAI_API_KEY is required (for LLM clustering).
+    Data source keys (SERPAPI_KEY, GITHUB_TOKEN) are optional —
+    sources without keys are simply skipped.
+
     Returns:
         A :class:`Config` instance.
 
     Raises:
-        RuntimeError: if a required variable is missing.
+        RuntimeError: if OPENAI_API_KEY is missing.
     """
-    # Load variables from .env if present.
     load_dotenv()
 
-    serpapi_key = os.getenv("SERPAPI_KEY")
     openai_key = os.getenv("OPENAI_API_KEY")
+    serpapi_key = os.getenv("SERPAPI_KEY")
     github_token = os.getenv("GITHUB_TOKEN")
 
-    missing = []
-    if not serpapi_key:
-        missing.append("SERPAPI_KEY")
     if not openai_key:
-        missing.append("OPENAI_API_KEY")
-
-    if missing:
         raise RuntimeError(
-            f"Missing required environment variables: {', '.join(missing)}."
-            " Please create a .env file or export the variables."
+            "Missing required environment variable: OPENAI_API_KEY."
+            " Please create a .env file or export the variable."
         )
 
     return Config(
-        serpapi_key=serpapi_key,
         openai_key=openai_key,
+        serpapi_key=serpapi_key,
         github_token=github_token,
     )
