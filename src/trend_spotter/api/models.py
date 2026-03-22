@@ -12,6 +12,7 @@ from pydantic import BaseModel
 class ScanRequest(BaseModel):
     field: str
     time_window: Literal["1d", "7d", "30d"] = "7d"
+    descriptions: bool = False
 
 
 class CrossDomainRequest(BaseModel):

@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 from ..config import DEFAULT_DB_PATH
-from ..signal import RawSignal
+from ..signal import RawSignal, canonicalize_label
 
 
 class SnapshotStore:
@@ -50,6 +50,7 @@ class SnapshotStore:
               id            INTEGER PRIMARY KEY AUTOINCREMENT,
               field         TEXT NOT NULL,
               cluster_label TEXT NOT NULL,
+              canonical_key TEXT,
               signal_count  INTEGER NOT NULL,
               window        TEXT NOT NULL,
               captured_at   TEXT NOT NULL
@@ -62,6 +63,7 @@ class SnapshotStore:
               id               INTEGER PRIMARY KEY AUTOINCREMENT,
               field            TEXT NOT NULL,
               cluster_label    TEXT NOT NULL,
+              canonical_key    TEXT,
               acceleration_raw REAL,
               durability_score INTEGER,
               window           TEXT NOT NULL,
@@ -69,6 +71,12 @@ class SnapshotStore:
             );
             """
         )
+        # Migration: add canonical_key to existing tables
+        for table in ("trend_snapshots", "trend_scores"):
+            try:
+                cur.execute(f"ALTER TABLE {table} ADD COLUMN canonical_key TEXT")
+            except sqlite3.OperationalError:
+                pass
         self.conn.commit()
 
     def write_snapshots(
@@ -98,10 +106,11 @@ class SnapshotStore:
         )
         for cluster in clusters:
             label = cluster["label"]
+            canon = cluster.get("canonical_key") or canonicalize_label(label)
             count = len(cluster["signal_ids"])
             cur.execute(
-                "INSERT INTO trend_snapshots (field, cluster_label, signal_count, window, captured_at) VALUES (?, ?, ?, ?, ?)",
-                (field, label, count, window, now),
+                "INSERT INTO trend_snapshots (field, cluster_label, canonical_key, signal_count, window, captured_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (field, label, canon, count, window, now),
             )
         self.conn.commit()
 
@@ -119,9 +128,10 @@ class SnapshotStore:
         now = datetime.now(timezone.utc).isoformat()
         cur = self.conn.cursor()
         for label, (accel_raw, dur_score) in scores.items():
+            canon = canonicalize_label(label)
             cur.execute(
-                "INSERT INTO trend_scores (field, cluster_label, acceleration_raw, durability_score, window, captured_at) VALUES (?, ?, ?, ?, ?, ?)",
-                (field, label, accel_raw, dur_score, window, now),
+                "INSERT INTO trend_scores (field, cluster_label, canonical_key, acceleration_raw, durability_score, window, captured_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (field, label, canon, accel_raw, dur_score, window, now),
             )
         self.conn.commit()
 
@@ -132,8 +142,28 @@ class SnapshotStore:
         window: str,
         captured_before: str,
     ) -> Optional[int]:
-        """Retrieve the most recent signal count for a cluster prior to a given time."""
+        """Retrieve the most recent signal count for a cluster prior to a given time.
+
+        Matches on canonical_key first (stable across label variations),
+        then falls back to exact label for pre-migration data.
+        """
+        canon = canonicalize_label(label)
         cur = self.conn.cursor()
+        # Try canonical key first
+        cur.execute(
+            """
+            SELECT signal_count
+            FROM trend_snapshots
+            WHERE field = ? AND canonical_key = ? AND window = ? AND captured_at < ?
+            ORDER BY captured_at DESC
+            LIMIT 1
+            """,
+            (field, canon, window, captured_before),
+        )
+        row = cur.fetchone()
+        if row:
+            return row["signal_count"]
+        # Fallback: exact label match (pre-migration rows)
         cur.execute(
             """
             SELECT signal_count
@@ -154,8 +184,26 @@ class SnapshotStore:
         window: str,
         captured_before: str,
     ) -> Optional[float]:
-        """Retrieve the most recent raw acceleration for trajectory detection."""
+        """Retrieve the most recent raw acceleration for trajectory detection.
+
+        Uses canonical_key matching, with exact label fallback.
+        """
+        canon = canonicalize_label(label)
         cur = self.conn.cursor()
+        cur.execute(
+            """
+            SELECT acceleration_raw
+            FROM trend_scores
+            WHERE field = ? AND canonical_key = ? AND window = ? AND captured_at < ?
+            ORDER BY captured_at DESC
+            LIMIT 1
+            """,
+            (field, canon, window, captured_before),
+        )
+        row = cur.fetchone()
+        if row:
+            return row["acceleration_raw"]
+        # Fallback: exact label
         cur.execute(
             """
             SELECT acceleration_raw

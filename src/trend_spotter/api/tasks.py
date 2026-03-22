@@ -20,7 +20,10 @@ _executor = ThreadPoolExecutor(max_workers=2)
 _tasks: Dict[str, Dict[str, Any]] = {}
 
 
-def submit_scan(field: str, window: str, config: Config) -> str:
+def submit_scan(
+    field: str, window: str, config: Config, *,
+    generate_descriptions: bool = False,
+) -> str:
     """Submit a scan to run in the background. Returns a scan_id."""
     scan_id = str(uuid.uuid4())
     _tasks[scan_id] = {"status": "pending", "result": None, "error": None}
@@ -28,7 +31,8 @@ def submit_scan(field: str, window: str, config: Config) -> str:
     def _run():
         _tasks[scan_id]["status"] = "running"
         try:
-            result = run_pipeline(field, window, config)
+            result = run_pipeline(field, window, config,
+                                  generate_descriptions=generate_descriptions)
             _tasks[scan_id]["result"] = result
             _tasks[scan_id]["status"] = "complete"
         except Exception as exc:
@@ -45,6 +49,10 @@ def get_scan(scan_id: str) -> Optional[Dict[str, Any]]:
     return _tasks.get(scan_id)
 
 
-def run_scan_sync(field: str, window: str, config: Config) -> Dict[str, Any]:
+def run_scan_sync(
+    field: str, window: str, config: Config, *,
+    generate_descriptions: bool = False,
+) -> Dict[str, Any]:
     """Run a scan synchronously and return the result."""
-    return run_pipeline(field, window, config)
+    return run_pipeline(field, window, config,
+                        generate_descriptions=generate_descriptions)

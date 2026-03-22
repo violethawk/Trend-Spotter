@@ -4,10 +4,25 @@ import math
 
 import pytest
 
-from trend_spotter.signal import RawSignal
+from trend_spotter.signal import RawSignal, canonicalize_label
 from trend_spotter.scoring.mentions import compute_mentions_scores, MENTION_WEIGHTS
 from trend_spotter.scoring.acceleration import compute_acceleration_scores
 from trend_spotter.persistence.snapshot import SnapshotStore
+
+
+class TestCanonicalizeLabel:
+    def test_case_insensitive(self):
+        assert canonicalize_label("AI Agents") == canonicalize_label("ai agents")
+
+    def test_word_order_independent(self):
+        assert canonicalize_label("AI agent frameworks") == canonicalize_label("Frameworks for AI agents")
+
+    def test_strips_stopwords(self):
+        assert canonicalize_label("The AI agents") == canonicalize_label("AI agents")
+
+    def test_variations_match(self):
+        """The key flywheel-saving test: LLM label variations produce same key."""
+        assert canonicalize_label("AI agent frameworks") == canonicalize_label("AI Agent Framework")
 
 
 def _sig(source="web", title="test", value=1.0, extras=None):
@@ -78,7 +93,7 @@ class TestAccelerationScoring:
         # 5 current vs 2 baseline -> positive log delta
         assert result["A"][1] > 0
 
-    def test_single_cluster_gets_50_when_equal(self):
+    def test_no_change_gets_50(self):
         store = SnapshotStore(db_path=":memory:")
         store.conn.execute(
             "INSERT INTO trend_snapshots (field, cluster_label, signal_count, window, captured_at) VALUES (?, ?, ?, ?, ?)",
@@ -91,5 +106,18 @@ class TestAccelerationScoring:
             clusters, "AI", "7d", store, "2025-01-02T00:00:00",
             per_trend_gaps=gaps,
         )
-        # Single cluster with no change -> normalised to 50
+        # No change -> score 50 (fixed scale)
         assert result["A"][0] == 50
+        assert result["A"][1] == pytest.approx(0.0)
+
+    def test_no_baseline_gets_50_not_spike(self):
+        """Missing baseline should score 50 (unknown), not a false spike."""
+        store = SnapshotStore(db_path=":memory:")
+        clusters = [{"label": "A", "signal_ids": ["1", "2", "3"]}]
+        gaps: dict = {}
+        result = compute_acceleration_scores(
+            clusters, "AI", "7d", store, "2099-01-01T00:00:00",
+            per_trend_gaps=gaps,
+        )
+        assert result["A"][0] == 50
+        assert result["A"][1] == 0.0

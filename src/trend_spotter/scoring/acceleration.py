@@ -1,7 +1,9 @@
 """Acceleration scoring for Trend Spotter.
 
 Computes rate-of-change scores by comparing current signal counts
-against snapshot baselines, normalised to 0-100.
+against snapshot baselines. Raw log-delta values are stored for the
+feedback loop; normalised 0-100 scores use a fixed scale so they
+are comparable across runs.
 """
 
 from __future__ import annotations
@@ -11,6 +13,14 @@ from typing import Dict, List, Tuple
 
 from ..signal import RawSignal
 from ..persistence.snapshot import SnapshotStore
+
+# Fixed reference range for normalisation.
+# A raw log-delta of 0 = no change = score 50.
+# A raw log-delta of +RAW_CEILING = score 100 (strong growth).
+# A raw log-delta of -RAW_CEILING = score 0 (strong decline).
+# log(6) - log(1) ≈ 1.79 (going from 0 to 5 signals), so 2.0 is a
+# reasonable ceiling that captures most real acceleration.
+RAW_CEILING = 2.0
 
 
 def compute_acceleration_scores(
@@ -26,7 +36,8 @@ def compute_acceleration_scores(
 
     This function looks up the previous signal count for each cluster
     label and computes the log difference. Scores are normalised to
-    0-100 across all clusters.
+    0-100 using a fixed scale (not relative to other clusters in the
+    same run), so they are comparable across runs.
 
     Args:
         clusters: List of cluster dicts.
@@ -41,7 +52,7 @@ def compute_acceleration_scores(
     Returns:
         Mapping from cluster label to (normalised_score, raw_acceleration).
     """
-    raw_acc: Dict[str, float] = {}
+    scores: Dict[str, Tuple[int, float]] = {}
     for cluster in clusters:
         label = cluster["label"]
         current_count = len(cluster["signal_ids"])
@@ -49,23 +60,19 @@ def compute_acceleration_scores(
             field, label, window, captured_before=run_start_time_iso
         )
         if prev_count is None:
-            # No baseline; acceleration score will be 0 and flagged later
             per_trend_gaps.setdefault(label, []).append(f"no_baseline:{label}")
-            prev_count = 0
-        # Compute log difference
+            # No baseline: raw=0, score=50 (unknown, not a false spike)
+            scores[label] = (50, 0.0)
+            continue
+
         raw_val = math.log(current_count + 1) - math.log(prev_count + 1)
-        raw_acc[label] = raw_val
-    if not raw_acc:
-        return {}
-    values = list(raw_acc.values())
-    min_val = min(values)
-    max_val = max(values)
-    scores: Dict[str, Tuple[int, float]] = {}
-    if max_val == min_val:
-        for label, val in raw_acc.items():
-            scores[label] = (50, val)
-    else:
-        for label, val in raw_acc.items():
-            norm = int(round(((val - min_val) / (max_val - min_val)) * 100))
-            scores[label] = (norm, val)
+
+        # Fixed-scale normalisation: clamp to [-RAW_CEILING, +RAW_CEILING]
+        # then map to [0, 100] where 50 = no change
+        clamped = max(-RAW_CEILING, min(RAW_CEILING, raw_val))
+        norm = int(round(50 + (clamped / RAW_CEILING) * 50))
+        norm = max(0, min(100, norm))
+
+        scores[label] = (norm, raw_val)
+
     return scores

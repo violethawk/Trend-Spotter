@@ -27,7 +27,7 @@ from .pipeline import run_pipeline
 logger = logging.getLogger(__name__)
 
 
-def run(field: str, window: str) -> None:
+def run(field: str, window: str, descriptions: bool = False) -> None:
     """Run the full Trend Spotter pipeline and print output as JSON."""
     try:
         config = load_config()
@@ -35,7 +35,7 @@ def run(field: str, window: str) -> None:
         print(str(e), file=sys.stderr)
         sys.exit(1)
 
-    output = run_pipeline(field, window, config)
+    output = run_pipeline(field, window, config, generate_descriptions=descriptions)
     print(json.dumps(output, indent=2))
 
 
@@ -222,6 +222,10 @@ def main() -> None:
         "--window", default="7d", choices=["1d", "7d", "30d"],
         help="Time window to consider (default: 7d)",
     )
+    scan_parser.add_argument(
+        "--descriptions", action="store_true",
+        help="Generate LLM descriptions for trends (costs extra tokens)",
+    )
 
     eval_parser = subparsers.add_parser("evaluate", help="Evaluate matured predictions")
     eval_parser.add_argument(
@@ -262,7 +266,7 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.command == "scan":
-        run(args.field, args.window)
+        run(args.field, args.window, args.descriptions)
     elif args.command == "evaluate":
         run_evaluate(args.horizon)
     elif args.command == "accuracy":

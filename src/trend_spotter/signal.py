@@ -9,10 +9,46 @@ required for downstream clustering and scoring.
 
 from __future__ import annotations
 
+import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
+
+_LABEL_STOPWORDS = frozenset({
+    "the", "and", "for", "with", "that", "this", "of", "in", "on",
+    "at", "to", "a", "an", "from", "by", "as", "is", "are", "new",
+    "based", "using", "via", "its",
+})
+
+
+def _simple_stem(word: str) -> str:
+    """Minimal English stemmer for label canonicalization."""
+    if len(word) <= 3:
+        return word
+    for suffix in ("ations", "ments", "ness", "ings", "tion", "sion",
+                   "ment", "able", "ible", "ful", "ing", "ies", "es", "ed", "ly", "s"):
+        if word.endswith(suffix) and len(word) - len(suffix) >= 2:
+            return word[:-len(suffix)]
+    return word
+
+
+def canonicalize_label(label: str) -> str:
+    """Produce a stable canonical key from a cluster label.
+
+    Lowercases, extracts alphanumeric tokens, removes stopwords,
+    applies simple stemming, sorts alphabetically, and joins with
+    underscores.
+
+    This ensures that "AI agent frameworks" and "AI Agent Framework"
+    and "Frameworks for AI agents" all produce the same key.
+    """
+    tokens = re.findall(r"[a-z0-9]+", label.lower())
+    meaningful = sorted(
+        _simple_stem(t) for t in tokens
+        if t not in _LABEL_STOPWORDS and len(t) > 1
+    )
+    return "_".join(meaningful) if meaningful else label.lower().strip()
 
 
 @dataclass

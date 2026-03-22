@@ -25,14 +25,16 @@ async def create_scan(
         raise HTTPException(status_code=503, detail=str(e))
 
     if sync:
-        result = run_scan_sync(req.field, req.time_window, config)
+        result = run_scan_sync(req.field, req.time_window, config,
+                               generate_descriptions=req.descriptions)
         return ScanStatusResponse(
             scan_id="sync",
             status="complete",
             result=result,
         )
 
-    scan_id = submit_scan(req.field, req.time_window, config)
+    scan_id = submit_scan(req.field, req.time_window, config,
+                          generate_descriptions=req.descriptions)
     return ScanStatusResponse(scan_id=scan_id, status="pending")
 
 

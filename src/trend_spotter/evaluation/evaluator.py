@@ -11,6 +11,7 @@ as input for Phase 6 weight tuning.
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 import re
@@ -79,8 +80,13 @@ def evaluate_prediction(
     # Re-query signals for this field
     current_signals = _requery_signals(field, window, config)
 
+    # Extract original evidence URLs for dedup-aware comparison
+    original_urls = _extract_original_urls(prediction)
+
     # Check if the trend is still present in current signals
-    presence_count = _count_trend_presence(trend_label, current_signals)
+    presence_count, new_signal_count = _count_trend_presence(
+        trend_label, current_signals, original_urls
+    )
 
     # Compute growth delta vs original
     original_count = _estimate_original_signal_count(prediction)
@@ -238,9 +244,47 @@ def _requery_signals(field: str, window: str, config: Config) -> List[RawSignal]
     return signals
 
 
-def _count_trend_presence(trend_label: str, signals: List[RawSignal]) -> int:
-    """Count how many current signals match the trend label."""
-    # Extract key terms from the label for fuzzy matching
+def _extract_original_urls(prediction: Dict[str, Any]) -> set:
+    """Extract URLs from the original prediction's evidence snapshot."""
+    urls = set()
+    evidence_json = prediction.get("evidence_json")
+    if evidence_json:
+        try:
+            evidence = json.loads(evidence_json) if isinstance(evidence_json, str) else evidence_json
+            for item in evidence:
+                url = item.get("url")
+                if url:
+                    urls.add(_normalize_url(url))
+        except (json.JSONDecodeError, TypeError):
+            pass
+    return urls
+
+
+def _normalize_url(url: str) -> str:
+    """Normalize a URL for dedup comparison (strip protocol, trailing slash, params)."""
+    url = url.lower().strip()
+    for prefix in ("https://", "http://", "www."):
+        if url.startswith(prefix):
+            url = url[len(prefix):]
+    url = url.rstrip("/")
+    # Strip query params for comparison
+    if "?" in url:
+        url = url.split("?")[0]
+    return url
+
+
+def _count_trend_presence(
+    trend_label: str,
+    signals: List[RawSignal],
+    original_urls: set,
+) -> Tuple[int, int]:
+    """Count current signals matching the trend, with URL dedup.
+
+    Returns:
+        Tuple of (total_matching, genuinely_new). Genuinely new signals
+        are those matching the trend but NOT present in the original
+        evidence URLs.
+    """
     stopwords = {
         "the", "and", "for", "with", "that", "this", "of", "in", "on",
         "at", "to", "a", "an", "from", "by", "as", "is", "are", "new",
@@ -252,18 +296,22 @@ def _count_trend_presence(trend_label: str, signals: List[RawSignal]) -> int:
     }
 
     if not label_words:
-        return 0
+        return 0, 0
 
-    count = 0
+    total = 0
+    new_count = 0
     for sig in signals:
         text = ((sig.title or "") + " " + (sig.snippet or "")).lower()
         sig_words = set(token_pattern.findall(text))
-        # Match if at least half the label words appear in the signal
         overlap = len(label_words & sig_words)
         if overlap >= max(1, len(label_words) // 2):
-            count += 1
+            total += 1
+            # Check if this is a genuinely new signal
+            sig_url = _normalize_url(sig.url) if sig.url else ""
+            if sig_url and sig_url not in original_urls:
+                new_count += 1
 
-    return count
+    return total, new_count
 
 
 def _estimate_original_signal_count(prediction: Dict[str, Any]) -> int:

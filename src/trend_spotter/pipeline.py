@@ -29,13 +29,21 @@ from .signal import RawSignal
 logger = logging.getLogger(__name__)
 
 
-def run_pipeline(field: str, window: str, config: Config) -> Dict[str, Any]:
+def run_pipeline(
+    field: str,
+    window: str,
+    config: Config,
+    generate_descriptions: bool = False,
+) -> Dict[str, Any]:
     """Run the full Trend Spotter pipeline and return structured output.
 
     Args:
         field: Field or topic to search for.
         window: Time window (1d, 7d, 30d).
         config: Runtime configuration.
+        generate_descriptions: If True, call LLM to generate trend
+            descriptions. If False (default), use the trend label.
+            Saves ~3 LLM calls per scan during accumulation.
 
     Returns:
         Dict with field, time_window, generated_at, trends, run_data_gaps.
@@ -141,15 +149,18 @@ def run_pipeline(field: str, window: str, config: Config) -> Dict[str, Any]:
         trajectory = ct.trajectory if ct else "stable"
         prediction_id = ct.prediction_id if ct else None
 
-        titles = []
-        for sid in cluster["signal_ids"]:
-            for sig in signals:
-                if sig.id == sid:
-                    titles.append(sig.title)
-                    break
-        description = _generate_description(
-            label, titles, field, config.openai_key
-        ) if not hard_timeout else f"{label} is an emerging topic within {field}."
+        if generate_descriptions and not hard_timeout:
+            titles = []
+            for sid in cluster["signal_ids"]:
+                for sig in signals:
+                    if sig.id == sid:
+                        titles.append(sig.title)
+                        break
+            description = _generate_description(
+                label, titles, field, config.openai_key
+            )
+        else:
+            description = f"{label} is an emerging topic within {field}."
 
         sources = _get_sources_for_cluster(cluster, signals)
 

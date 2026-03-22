@@ -22,7 +22,7 @@ from typing import Dict, List, Optional
 import requests
 
 from ..config import Config
-from ..signal import RawSignal
+from ..signal import RawSignal, canonicalize_label
 
 
 logger = logging.getLogger(__name__)
@@ -74,16 +74,16 @@ def cluster_signals(signals: List[RawSignal], field: str, config: Config) -> Lis
         logger.warning("LLM clustering failed; falling back to keyword grouping: %s", exc)
     if not clusters:
         clusters = _fallback_cluster(signals)
-    # Compute source breakdown
+    # Compute source breakdown and canonical keys
     for cluster in clusters:
         breakdown = defaultdict(int)
         for sid in cluster["signal_ids"]:
-            # find signal by id
             for sig in signals:
                 if sig.id == sid:
                     breakdown[sig.source] += 1
                     break
         cluster["source_breakdown"] = dict(breakdown)
+        cluster["canonical_key"] = canonicalize_label(cluster["label"])
     return clusters
 
 

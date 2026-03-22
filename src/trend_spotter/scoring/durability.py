@@ -13,8 +13,6 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-import requests
-
 from ..config import Config
 from ..signal import RawSignal
 
@@ -260,63 +258,37 @@ def _score_composability(signals: List[RawSignal]) -> int:
 # Sentiment filter
 # ---------------------------------------------------------------------------
 
+_NEGATIVE_KEYWORDS = {
+    "deprecated", "broken", "abandoned", "vulnerability", "exploit",
+    "lawsuit", "recall", "shutdown", "layoff", "bankrupt", "scam",
+    "avoid", "warning", "critical bug", "end of life", "sunset",
+    "compromised", "breach", "unsafe", "unmaintained",
+}
+
+
 def _compute_sentiment_penalty(
     signals: List[RawSignal],
     config: Config,
 ) -> float:
-    """Use an LLM to classify cluster sentiment and return a penalty multiplier.
+    """Classify cluster sentiment via keyword analysis.
+
+    Scans signal titles and snippets for negative-sentiment keywords.
+    If >30% of signals contain negative language, applies a 0.6
+    penalty. Otherwise returns 1.0 (neutral/positive).
 
     Returns:
         1.0 for neutral/positive sentiment, 0.6 for negative sentiment.
     """
-    # Build text sample from signal titles and snippets
-    text_parts = []
-    for sig in signals[:10]:  # Cap to avoid token overflow
-        text_parts.append(sig.title or "")
-        if sig.snippet:
-            text_parts.append(sig.snippet)
-    combined_text = "\n".join(text_parts)[:1500]  # Truncate
-
-    if not combined_text.strip():
+    if not signals:
         return 1.0
 
-    system_prompt = (
-        "Classify the overall sentiment of these technology discussions. "
-        "Return ONLY one word: negative, neutral, or positive. "
-        "Negative means: complaints, warnings, avoid this, broken, deprecated. "
-        "Neutral means: analytical, implementation-focused, factual. "
-        "Positive means: enthusiastic praise without substance."
-    )
+    negative_count = 0
+    for sig in signals:
+        text = ((sig.title or "") + " " + (sig.snippet or "")).lower()
+        if any(kw in text for kw in _NEGATIVE_KEYWORDS):
+            negative_count += 1
 
-    data = {
-        "model": "gpt-3.5-turbo",
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": combined_text},
-        ],
-        "max_tokens": 10,
-        "temperature": 0.0,
-    }
-    headers = {
-        "Authorization": f"Bearer {config.openai_key}",
-        "Content-Type": "application/json",
-    }
-
-    try:
-        response = requests.post(
-            "https://api.openai.com/v1/chat/completions",
-            headers=headers,
-            json=data,
-            timeout=10,
-        )
-        if response.status_code != 200:
-            logger.warning("Sentiment API returned %d; defaulting to neutral", response.status_code)
-            return 1.0
-        resp = response.json()
-        sentiment = resp["choices"][0]["message"]["content"].strip().lower()
-        if "negative" in sentiment:
-            return 0.6
-        return 1.0
-    except Exception as exc:
-        logger.warning("Sentiment call failed (%s); defaulting to neutral", exc)
-        return 1.0
+    negative_ratio = negative_count / len(signals)
+    if negative_ratio > 0.3:
+        return 0.6
+    return 1.0
