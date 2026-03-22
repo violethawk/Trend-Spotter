@@ -1,15 +1,17 @@
-"""Command line interface for Trend Spotter.
+"""Command line interface for Trend Spotter.
 
 This module wires together configuration loading, query routing,
-clustering, scoring, ranking and snapshot persistence. It exposes a
-CLI that accepts a field and time window and outputs a JSON summary
-of the top trends.
+clustering, scoring, durability analysis, classification, ranking,
+prediction storage and snapshot persistence. It exposes a CLI that
+accepts a field and time window and outputs a JSON summary of the
+top trends.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import logging
 import sys
 import time
 from datetime import datetime, timezone
@@ -19,29 +21,22 @@ from .config import load_config
 from .query_router import collect_signals
 from .clustering import cluster_signals
 from .scoring import compute_mentions_scores, compute_acceleration_scores
+from .durability import compute_durability_scores
+from .classification import classify_trends
 from .ranking import rank_clusters
 from .snapshot import SnapshotStore
+from .prediction_store import PredictionStore
 from .signal import RawSignal
 
 import requests
 
+logger = logging.getLogger(__name__)
+
 
 def generate_description(label: str, signal_titles: List[str], field: str, openai_key: str) -> str:
-    """Generate a human readable description of a trend using OpenAI.
-
-    If the API call fails, a generic description is returned.
-
-    Args:
-        label: Cluster label.
-        signal_titles: List of titles from supporting signals.
-        field: Field of interest (used to contextualise generic fallback).
-        openai_key: OpenAI API key.
-
-    Returns:
-        A 1–2 sentence description.
-    """
+    """Generate a human readable description of a trend using OpenAI."""
     system_prompt = (
-        "You are a technical analyst. Write a 1–2 sentence description of this emerging trend. "
+        "You are a technical analyst. Write a 1-2 sentence description of this emerging trend. "
         "Be specific. Do not use marketing language. Do not start with \"This trend\"."
     )
     user_content = f"Trend name: {label}\nSupporting signals:\n" + "\n".join(signal_titles)
@@ -69,30 +64,18 @@ def generate_description(label: str, signal_titles: List[str], field: str, opena
             raise RuntimeError(f"status {response.status_code}: {response.text}")
         resp = response.json()
         content = resp["choices"][0]["message"]["content"]
-        # Strip leading/trailing whitespace
         return content.strip()
     except Exception:
-        # Fallback generic description
         return f"{label} is an emerging topic within {field}."
 
 
 def get_sources_for_cluster(cluster: Dict, signals: List[RawSignal]) -> List[Dict]:
-    """Select representative source objects for a cluster.
-
-    Args:
-        cluster: Cluster dictionary with ``source_breakdown`` and ``signal_ids``.
-        signals: List of all raw signals.
-
-    Returns:
-        A list of source objects, at least two if available.
-    """
+    """Select representative source objects for a cluster."""
     sig_map = {sig.id: sig for sig in signals}
     sources = []
-    # Sorting order to prioritise GitHub and HN then web for representation
     priority = ["github", "hn", "web"]
     for source in priority:
         if source in cluster.get("source_breakdown", {}):
-            # Pick the signal with highest value for this source
             selected = None
             max_value = -1
             for sid in cluster["signal_ids"]:
@@ -112,25 +95,25 @@ def get_sources_for_cluster(cluster: Dict, signals: List[RawSignal]) -> List[Dic
                     "source": source,
                     "signal": signal_label,
                 })
-    # Limit to at most three sources; ensure at least two if possible
     return sources[:3]
 
 
 def run(field: str, window: str) -> None:
-    """Run the full Trend Spotter pipeline and print output as JSON."""
+    """Run the full Trend Spotter pipeline and print output as JSON."""
     try:
         config = load_config()
     except RuntimeError as e:
         print(str(e), file=sys.stderr)
         sys.exit(1)
-    # Start time markers
+
     run_start_monotonic = time.monotonic()
     run_start_iso = datetime.now(timezone.utc).isoformat()
-    # Collect signals across query variants
+
+    # --- Phase 1: Collect signals ---
     signals, run_data_gaps = collect_signals(
         field, window, config, start_time=run_start_monotonic
     )
-    # If all sources fail, abort with error
+
     if not signals and all(src in run_data_gaps for src in ["web", "github", "hn"]):
         err = {
             "error": "All data sources failed. Check API keys and network.",
@@ -138,40 +121,79 @@ def run(field: str, window: str) -> None:
         }
         print(json.dumps(err, indent=2))
         return
-    # If hard timeout occurred during collection, no more processing
+
     hard_timeout = "hard_timeout" in run_data_gaps
-    # Cluster signals
+
+    # --- Phase 1: Cluster signals ---
     clusters = []
     if not hard_timeout:
         clusters = cluster_signals(signals, field, config)
-    # Compute scores if clusters exist
+
+    # --- Phase 1-2: Score (mentions + acceleration) ---
     mentions_scores: Dict[str, tuple] = {}
     acceleration_scores: Dict[str, tuple] = {}
     per_trend_gaps: Dict[str, List[str]] = {}
+    snapshot_store = SnapshotStore()
+
     if clusters:
         mentions_scores = compute_mentions_scores(clusters, signals)
-        # Initialize snapshot store
-        snapshot_store = SnapshotStore()
         acceleration_scores = compute_acceleration_scores(
-            clusters,
-            field,
-            window,
-            snapshot_store,
-            run_start_iso,
+            clusters, field, window, snapshot_store, run_start_iso,
             per_trend_gaps=per_trend_gaps,
         )
-        # Rank clusters
+
+        # --- Phase 3: Durability scoring ---
+        try:
+            durability_results = compute_durability_scores(
+                clusters, signals, config, per_trend_gaps,
+            )
+        except Exception as exc:
+            logger.warning("Durability scoring failed: %s", exc)
+            durability_results = {}
+            run_data_gaps.append("durability_scoring_failed")
+
+        # --- Rank clusters ---
         selected = rank_clusters(clusters, mentions_scores, acceleration_scores)
+
+        # --- Phase 4: Classification ---
+        try:
+            classified_trends = classify_trends(
+                selected, acceleration_scores, durability_results,
+                snapshot_store, field, window, run_start_iso, per_trend_gaps,
+            )
+        except Exception as exc:
+            logger.warning("Classification failed: %s", exc)
+            classified_trends = []
+            run_data_gaps.append("classification_failed")
+
+        # Build a lookup for classified trends
+        classified_map = {ct.label: ct for ct in classified_trends}
     else:
         selected = []
-    # Build final trends list
+        durability_results = {}
+        classified_map = {}
+
+    # --- Build output ---
     trends_output = []
     for cluster in selected:
         label = cluster["label"]
         mention_score = mentions_scores.get(label, (0, 0))[0]
         accel_score = acceleration_scores.get(label, (0, 0))[0]
         data_gaps = per_trend_gaps.get(label, [])
-        # Gather titles of supporting signals
+
+        # Durability result
+        dur_result = durability_results.get(label)
+        dur_score = dur_result.score if dur_result else 0
+        dur_signals = dur_result.signals if dur_result else {}
+        sentiment_penalty = dur_result.sentiment_multiplier if dur_result else 1.0
+
+        # Classification result
+        ct = classified_map.get(label)
+        classification = ct.classification if ct else "Ignore"
+        trajectory = ct.trajectory if ct else "stable"
+        prediction_id = ct.prediction_id if ct else None
+
+        # Generate description
         titles = []
         for sid in cluster["signal_ids"]:
             for sig in signals:
@@ -181,28 +203,65 @@ def run(field: str, window: str) -> None:
         description = generate_description(
             label, titles, field, config.openai_key
         ) if not hard_timeout else f"{label} is an emerging topic within {field}."
+
+        sources = get_sources_for_cluster(cluster, signals)
+
         trend_obj = {
             "name": label,
             "description": description,
-            "mentions_score": mention_score,
-            "acceleration_score": accel_score,
+            "scores": {
+                "mentions": mention_score,
+                "acceleration": accel_score,
+                "durability": dur_score,
+            },
+            "durability_signals": dur_signals,
+            "sentiment_penalty": sentiment_penalty,
+            "classification": classification,
+            "trajectory": trajectory,
+            "prediction_id": prediction_id,
             "data_gaps": data_gaps,
-            "sources": get_sources_for_cluster(cluster, signals),
+            "sources": sources,
         }
         trends_output.append(trend_obj)
-    # If no trends selected but we have clusters but they failed to meet criteria, include message
+
     if not trends_output and clusters:
         run_data_gaps.append("no_valid_trends")
-    # Persist snapshots only if at least one cluster exists
+
+    # --- Persist snapshots and predictions ---
     if clusters:
-        snapshot_store = SnapshotStore()
-        # Persist aggregated metrics and cluster counts
         try:
             snapshot_store.write_snapshots(field, window, signals, clusters)
+            # Write raw acceleration + durability for trajectory detection
+            trend_score_data = {}
+            for cluster in clusters:
+                label = cluster["label"]
+                _, accel_raw = acceleration_scores.get(label, (0, 0.0))
+                dur_result = durability_results.get(label)
+                dur_score = dur_result.score if dur_result else 0
+                trend_score_data[label] = (accel_raw, dur_score)
+            snapshot_store.write_trend_scores(field, window, trend_score_data)
         except Exception:
-            # Silently ignore snapshot persistence errors
             pass
-    # Compose output
+
+    # Write predictions to prediction store
+    if classified_map:
+        try:
+            prediction_store = PredictionStore()
+            for cluster in selected:
+                label = cluster["label"]
+                ct = classified_map.get(label)
+                if ct:
+                    dur_result = durability_results.get(label)
+                    accel_score = acceleration_scores.get(label, (0, 0))[0]
+                    evidence = get_sources_for_cluster(cluster, signals)
+                    prediction_store.write_prediction(
+                        ct, dur_result, accel_score,
+                        field, window, run_start_iso, evidence,
+                    )
+        except Exception:
+            pass
+
+    # --- Output ---
     output = {
         "field": field,
         "time_window": window,

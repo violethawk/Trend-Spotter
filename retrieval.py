@@ -1,10 +1,10 @@
 """Functions for retrieving raw signals from external APIs.
 
 This module encapsulates the network requests to SerpAPI, GitHub and
-Hacker News. Each function returns a list of :class:`RawSignal`
+Hacker News. Each function returns a list of :class:`RawSignal`
 instances. Errors are surfaced as exceptions so the caller can decide
 whether to retry or skip a source. Callers should provide sensible
-timeouts to prevent long‑running requests.
+timeouts to prevent long-running requests.
 """
 
 from __future__ import annotations
@@ -22,17 +22,7 @@ logger = logging.getLogger(__name__)
 
 
 def _window_to_tbs(window: str) -> str:
-    """Map a time window token to SerpAPI's tbs parameter.
-
-    Args:
-        window: One of ``'1d'``, ``'7d'`` or ``'30d'``.
-
-    Returns:
-        The corresponding ``tbs`` value for SerpAPI.
-
-    Raises:
-        ValueError: If the window is invalid.
-    """
+    """Map a time window token to SerpAPI's tbs parameter."""
     mapping = {
         "1d": "qdr:d",
         "7d": "qdr:w",
@@ -44,20 +34,7 @@ def _window_to_tbs(window: str) -> str:
 
 
 def fetch_web(query: str, window: str, serpapi_key: str, *, timeout: float = 10.0) -> List[RawSignal]:
-    """Retrieve web articles via SerpAPI.
-
-    Args:
-        query: Search query string.
-        window: Time window (``'1d'``, ``'7d'`` or ``'30d'``).
-        serpapi_key: SerpAPI API key.
-        timeout: Request timeout in seconds.
-
-    Returns:
-        A list of :class:`RawSignal` objects representing organic search results.
-
-    Raises:
-        Exception: If the HTTP request fails or the response is invalid.
-    """
+    """Retrieve web articles via SerpAPI."""
     endpoint = "https://serpapi.com/search.json"
     tbs = _window_to_tbs(window)
     params = {
@@ -89,17 +66,8 @@ def fetch_web(query: str, window: str, serpapi_key: str, *, timeout: float = 10.
 def fetch_github(query: str, window: str, github_token: Optional[str], *, timeout: float = 10.0) -> List[RawSignal]:
     """Retrieve GitHub repositories matching the query.
 
-    Args:
-        query: Search query string.
-        window: Time window (unused; included for API parity).
-        github_token: Optional personal access token to increase rate limits.
-        timeout: Request timeout in seconds.
-
-    Returns:
-        A list of :class:`RawSignal` objects for repositories.
-
-    Raises:
-        Exception: If the HTTP request fails or the response is invalid.
+    Extracts forks_count, created_at, and pushed_at into extras for
+    use by durability scoring.
     """
     endpoint = "https://api.github.com/search/repositories"
     params = {
@@ -114,7 +82,6 @@ def fetch_github(query: str, window: str, github_token: Optional[str], *, timeou
     if github_token:
         headers["Authorization"] = f"Bearer {github_token}"
     resp = requests.get(endpoint, params=params, headers=headers, timeout=timeout)
-    # GitHub returns 403 when rate limited or forbidden
     resp.raise_for_status()
     data = resp.json()
     items = data.get("items", [])
@@ -131,26 +98,21 @@ def fetch_github(query: str, window: str, github_token: Optional[str], *, timeou
                 url=html_url,
                 snippet=description,
                 value=float(stars),
+                extras={
+                    "forks_count": repo.get("forks_count", 0),
+                    "created_at": repo.get("created_at"),
+                    "pushed_at": repo.get("pushed_at"),
+                },
             ))
     return signals
 
 
 def fetch_hn(query: str, window: str, *, timeout: float = 10.0) -> List[RawSignal]:
-    """Retrieve Hacker News stories matching the query within a time window.
+    """Retrieve Hacker News stories matching the query within a time window.
 
-    Args:
-        query: Search query string.
-        window: Time window (``'1d'``, ``'7d'`` or ``'30d'``).
-        timeout: Request timeout in seconds.
-
-    Returns:
-        A list of :class:`RawSignal` objects for Hacker News stories.
-
-    Raises:
-        Exception: If the HTTP request fails or the response is invalid.
+    Extracts num_comments into extras for use by durability scoring.
     """
     endpoint = "https://hn.algolia.com/api/v1/search"
-    # Compute the start timestamp for the window
     now = datetime.now(timezone.utc)
     delta_map = {
         "1d": 1,
@@ -177,7 +139,7 @@ def fetch_hn(query: str, window: str, *, timeout: float = 10.0) -> List[RawSigna
         url = hit.get("url")
         object_id = hit.get("objectID")
         points = hit.get("points", 0)
-        # Fallback to HN item link if no URL present
+        num_comments = hit.get("num_comments", 0)
         if not url and object_id:
             url = f"https://news.ycombinator.com/item?id={object_id}"
         if title and url:
@@ -187,5 +149,8 @@ def fetch_hn(query: str, window: str, *, timeout: float = 10.0) -> List[RawSigna
                 url=url,
                 snippet=None,
                 value=float(points),
+                extras={
+                    "num_comments": num_comments,
+                },
             ))
     return signals

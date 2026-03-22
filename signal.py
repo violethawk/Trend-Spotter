@@ -1,9 +1,9 @@
 """Data structures for normalised signals.
 
 This module defines the :class:`RawSignal` dataclass used throughout
-Trend Spotter. Raw signals are normalised representations of items
+Trend Spotter. Raw signals are normalised representations of items
 retrieved from disparate sources (web search, GitHub repositories,
-Hacker News stories). Each signal carries the minimal set of fields
+Hacker News stories). Each signal carries the minimal set of fields
 required for downstream clustering and scoring.
 """
 
@@ -12,7 +12,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Dict, Optional
 
 
 @dataclass
@@ -29,10 +29,12 @@ class RawSignal:
         snippet: A short snippet or description of the signal. May be
             ``None`` for certain sources.
         value: Numeric value associated with the signal. For GitHub
-            repositories this is the stargazer count, for Hacker News
+            repositories this is the stargazer count, for Hacker News
             posts this is the points count, and for web articles it is
             always ``1``.
-        retrieved_at: ISO 8601 timestamp (UTC) marking when the signal
+        extras: Source-specific metadata. For GitHub: ``forks_count``,
+            ``created_at``, ``pushed_at``. For HN: ``num_comments``.
+        retrieved_at: ISO 8601 timestamp (UTC) marking when the signal
             was retrieved.
     """
 
@@ -41,6 +43,7 @@ class RawSignal:
     url: str
     value: float
     snippet: Optional[str] = None
+    extras: Dict[str, Any] = field(default_factory=dict)
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     retrieved_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
@@ -53,5 +56,6 @@ class RawSignal:
             "url": self.url,
             "snippet": self.snippet,
             "value": self.value,
+            "extras": self.extras,
             "retrieved_at": self.retrieved_at,
         }
