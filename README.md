@@ -1,4 +1,4 @@
-# Trend Spotter — Signal Extraction in the Real World
+# Trend Spotter — Introduction to Flywheels
 
 A system for identifying and evaluating emerging trends within a specific field across multiple time horizons.
 
