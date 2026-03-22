@@ -1,0 +1,21 @@
+services:
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file: .env
+    volumes:
+      - data:/app/src/trend_spotter/data
+    restart: unless-stopped
+
+  scheduler:
+    build: .
+    command: >
+      sh -c "while true; do trend-spotter schedule; sleep 86400; done"
+    env_file: .env
+    volumes:
+      - data:/app/src/trend_spotter/data
+    restart: unless-stopped
+
+volumes:
+  data:

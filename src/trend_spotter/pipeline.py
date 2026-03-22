@@ -42,11 +42,17 @@ def run_pipeline(field: str, window: str, config: Config) -> Dict[str, Any]:
     """
     run_start_monotonic = time.monotonic()
     run_start_iso = datetime.now(timezone.utc).isoformat()
+    timings: Dict[str, int] = {}
+
+    def _ms_since(start: float) -> int:
+        return int((time.monotonic() - start) * 1000)
 
     # --- Phase 1: Collect signals ---
+    t0 = time.monotonic()
     signals, run_data_gaps = collect_signals(
         field, window, config, start_time=run_start_monotonic
     )
+    timings["collection_ms"] = _ms_since(t0)
 
     if not signals and all(src in run_data_gaps for src in ["web", "github", "hn"]):
         return {
@@ -57,9 +63,11 @@ def run_pipeline(field: str, window: str, config: Config) -> Dict[str, Any]:
     hard_timeout = "hard_timeout" in run_data_gaps
 
     # --- Phase 1: Cluster signals ---
+    t0 = time.monotonic()
     clusters: List[Dict] = []
     if not hard_timeout:
         clusters = cluster_signals(signals, field, config)
+    timings["clustering_ms"] = _ms_since(t0)
 
     # --- Phase 1-2: Score (mentions + acceleration) ---
     mentions_scores: Dict[str, tuple] = {}
@@ -69,13 +77,16 @@ def run_pipeline(field: str, window: str, config: Config) -> Dict[str, Any]:
     prediction_store: PredictionStore | None = None
 
     if clusters:
+        t0 = time.monotonic()
         mentions_scores = compute_mentions_scores(clusters, signals)
         acceleration_scores = compute_acceleration_scores(
             clusters, field, window, snapshot_store, run_start_iso,
             per_trend_gaps=per_trend_gaps,
         )
+        timings["scoring_ms"] = _ms_since(t0)
 
         # --- Phase 3: Durability scoring (with Phase 6 tuned weights) ---
+        t0 = time.monotonic()
         prediction_store = PredictionStore()
         tuned_weights = prediction_store.get_current_weights()
         try:
@@ -87,11 +98,13 @@ def run_pipeline(field: str, window: str, config: Config) -> Dict[str, Any]:
             logger.warning("Durability scoring failed: %s", exc)
             durability_results = {}
             run_data_gaps.append("durability_scoring_failed")
+        timings["durability_ms"] = _ms_since(t0)
 
         # --- Rank clusters ---
         selected = rank_clusters(clusters, mentions_scores, acceleration_scores)
 
         # --- Phase 4: Classification ---
+        t0 = time.monotonic()
         try:
             classified_trends = classify_trends(
                 selected, acceleration_scores, durability_results,
@@ -101,6 +114,7 @@ def run_pipeline(field: str, window: str, config: Config) -> Dict[str, Any]:
             logger.warning("Classification failed: %s", exc)
             classified_trends = []
             run_data_gaps.append("classification_failed")
+        timings["classification_ms"] = _ms_since(t0)
 
         classified_map = {ct.label: ct for ct in classified_trends}
     else:
@@ -109,6 +123,7 @@ def run_pipeline(field: str, window: str, config: Config) -> Dict[str, Any]:
         classified_map = {}
 
     # --- Build output ---
+    t0 = time.monotonic()
     trends_output = []
     for cluster in selected:
         label = cluster["label"]
@@ -156,10 +171,13 @@ def run_pipeline(field: str, window: str, config: Config) -> Dict[str, Any]:
         }
         trends_output.append(trend_obj)
 
+    timings["description_ms"] = _ms_since(t0)
+
     if not trends_output and clusters:
         run_data_gaps.append("no_valid_trends")
 
     # --- Persist snapshots and predictions ---
+    t0 = time.monotonic()
     if clusters:
         try:
             snapshot_store.write_snapshots(field, window, signals, clusters)
@@ -193,6 +211,24 @@ def run_pipeline(field: str, window: str, config: Config) -> Dict[str, Any]:
                     )
         except Exception:
             pass
+    timings["persistence_ms"] = _ms_since(t0)
+
+    # --- Record run metrics ---
+    total_ms = _ms_since(run_start_monotonic)
+    timings["total_ms"] = total_ms
+    try:
+        if not prediction_store:
+            prediction_store = PredictionStore()
+        prediction_store.write_run_metrics({
+            "field": field,
+            "window": window,
+            "run_at": run_start_iso,
+            "trend_count": len(trends_output),
+            "signal_count": len(signals),
+            **timings,
+        })
+    except Exception:
+        pass
 
     return {
         "field": field,
@@ -200,6 +236,7 @@ def run_pipeline(field: str, window: str, config: Config) -> Dict[str, Any]:
         "generated_at": run_start_iso,
         "trends": trends_output,
         "run_data_gaps": run_data_gaps,
+        "latency_ms": total_ms,
     }
 
 

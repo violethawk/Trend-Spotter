@@ -19,7 +19,10 @@ async def create_scan(
 ):
     """Start a trend scan. Returns immediately with a scan_id (async)
     or blocks until complete (sync=true)."""
-    config = load_config()
+    try:
+        config = load_config()
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
 
     if sync:
         result = run_scan_sync(req.field, req.time_window, config)

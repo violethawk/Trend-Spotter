@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 
-from .routes import accuracy, cross_domain, health, predictions, scans
+from .routes import accuracy, cross_domain, health, metrics, predictions, scans
 
 
 def create_app() -> FastAPI:
@@ -24,6 +24,7 @@ def create_app() -> FastAPI:
     app.include_router(predictions.router, tags=["predictions"])
     app.include_router(accuracy.router, tags=["accuracy"])
     app.include_router(cross_domain.router, tags=["cross-domain"])
+    app.include_router(metrics.router, tags=["metrics"])
 
     return app
 

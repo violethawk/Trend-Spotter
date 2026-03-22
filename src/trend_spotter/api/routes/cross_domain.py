@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 
 from ...config import load_config
 from ...cross_domain import detect_cross_domain_trends
@@ -17,7 +17,10 @@ router = APIRouter(dependencies=[Depends(verify_api_key)])
 @router.post("/cross-domain")
 async def analyze_cross_domain(req: CrossDomainRequest):
     """Detect trends emerging across multiple domains."""
-    config = load_config()
+    try:
+        config = load_config()
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
     store = PredictionStore()
 
     # Optionally scan fields missing recent data

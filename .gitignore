@@ -7,3 +7,8 @@ build/
 .env
 *.db
 .pytest_cache/
+
+# Keep the data directory structure but not the DB contents.
+# The SQLite DB is the flywheel's memory — back it up.
+# Recommended: periodic copy of src/trend_spotter/data/trend_spotter.db
+# to a durable location (S3, mounted volume, etc.)

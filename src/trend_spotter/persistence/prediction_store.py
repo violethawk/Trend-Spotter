@@ -122,7 +122,79 @@ class PredictionStore:
             );
             """
         )
+
+        # Run metrics (latency tracking)
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS run_metrics (
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                field            TEXT NOT NULL,
+                window           TEXT NOT NULL,
+                total_ms         INTEGER NOT NULL,
+                collection_ms    INTEGER,
+                clustering_ms    INTEGER,
+                scoring_ms       INTEGER,
+                durability_ms    INTEGER,
+                classification_ms INTEGER,
+                description_ms   INTEGER,
+                persistence_ms   INTEGER,
+                trend_count      INTEGER,
+                signal_count     INTEGER,
+                run_at           TEXT NOT NULL
+            );
+            """
+        )
         self.conn.commit()
+
+    def write_run_metrics(self, metrics: Dict[str, Any]) -> None:
+        """Persist pipeline run timing metrics."""
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO run_metrics
+                (field, window, total_ms, collection_ms, clustering_ms,
+                 scoring_ms, durability_ms, classification_ms,
+                 description_ms, persistence_ms,
+                 trend_count, signal_count, run_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                metrics.get("field"),
+                metrics.get("window"),
+                metrics.get("total_ms"),
+                metrics.get("collection_ms"),
+                metrics.get("clustering_ms"),
+                metrics.get("scoring_ms"),
+                metrics.get("durability_ms"),
+                metrics.get("classification_ms"),
+                metrics.get("description_ms"),
+                metrics.get("persistence_ms"),
+                metrics.get("trend_count"),
+                metrics.get("signal_count"),
+                metrics.get("run_at"),
+            ),
+        )
+        self.conn.commit()
+
+    def get_latency_percentiles(
+        self, last_n: int = 100
+    ) -> Dict[str, Any]:
+        """Compute P50 and P95 from recent runs."""
+        cur = self.conn.cursor()
+        cur.execute(
+            "SELECT total_ms FROM run_metrics ORDER BY run_at DESC LIMIT ?",
+            (last_n,),
+        )
+        values = sorted(row["total_ms"] for row in cur.fetchall())
+        if not values:
+            return {"p50_ms": None, "p95_ms": None, "sample_size": 0}
+        p50_idx = int(len(values) * 0.50)
+        p95_idx = min(int(len(values) * 0.95), len(values) - 1)
+        return {
+            "p50_ms": values[p50_idx],
+            "p95_ms": values[p95_idx],
+            "sample_size": len(values),
+        }
 
     def write_prediction(
         self,
